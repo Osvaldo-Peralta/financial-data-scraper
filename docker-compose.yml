@@ -1,0 +1,30 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: market_user
+      POSTGRES_PASSWORD: market_pass
+      POSTGRES_DB: market_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U market_user -d market_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  scraper:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://market_user:market_pass@db:5432/market_db
+      LOG_LEVEL: INFO
+    command: ["--start", "2020-01-01", "--interval", "1d"]
+
+volumes:
+  pg_data:
