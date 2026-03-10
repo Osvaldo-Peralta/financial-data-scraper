@@ -72,6 +72,16 @@ class Repository:
 
     # ── connection management / gestión de conexión ────────────────────────
 
+    @property
+    def connection(self) -> PgConnection:
+        """
+        Propiedad para obtener la conexión de forma segura.
+        Lanza un error explícito si no se ha llamado a connect().
+        """
+        if self._conn is None or self._conn.closed:
+            raise RuntimeError("Repository is not connected. Call connect() first.")
+        return self._conn
+
     def connect(self) -> None:
         """Open a connection and ensure the schema exists."""
         logger.info("Connecting to PostgreSQL…")
@@ -92,18 +102,19 @@ class Repository:
 
         Gestor de contexto que hace commit si todo va bien y rollback si ocurre un error.
         """
+        conn = self.connection
         try:
             yield
-            self._conn.commit()
+            conn.commit()
         except Exception:
-            self._conn.rollback()
+            conn.rollback()
             raise
 
     # ── schema / esquema ───────────────────────────────────────────────────
 
     def _ensure_schema(self) -> None:
         with self._transaction():
-            with self._conn.cursor() as cur:
+            with self.connection.cursor() as cur:
                 cur.execute(_CREATE_TABLE_SQL)
         logger.debug("Schema verified / Esquema verificado.")
 
@@ -114,6 +125,9 @@ class Repository:
         df: pd.DataFrame,
         block_size: int = DEFAULT_BLOCK_SIZE,
     ) -> int:
+        if df.empty:
+            logger.warning("Empty DataFrame — nothing to save.")
+            return 0
         """
         Persist a DataFrame into market_data using block-based UPSERT.
 
@@ -128,38 +142,45 @@ class Repository:
         Returns:
             Total number of rows upserted.
         """
-        if df.empty:
-            logger.warning("Empty DataFrame — nothing to save.")
-            return 0
+        # iterrows() is extremely slow / es extremadamente lento.
+        # Use to_dict('records') / Usar to_dict('records')
+        try:
+            # 1. Copia local para no mutar el DF original
+            df_working = df.copy()
 
-        rows = [
-            (
-                row["date"],
-                row["ticker"],
-                float(row["open"]),
-                float(row["high"]),
-                float(row["low"]),
-                float(row["close"]),
-                int(row["volume"]),
-            )
-            for _, row in df.iterrows()
-        ]
+            # 2. SEGURO DE CLEAN CODE: Si yf devolvió MultiIndex, lo colapsamos aquí también
+            if isinstance(df_working.columns, pd.MultiIndex):
+                df_working.columns = df_working.columns.get_level_values(0)
+            
+            # Normalizamos nombres por si acaso
+            df_working.columns = [str(c).lower() for c in df_working.columns]
+
+            # 3. Selección estricta de columnas
+            cols = ["date", "ticker", "open", "high", "low", "close", "volume"]
+            df_ordered = df_working[cols]
+
+            # 4. Iteración Ultra-Rápida usando NumPy (Evita errores de unpacking de itertuples)
+            # .to_numpy() devuelve un array puro de Python, ideal para este mapeo
+            rows = [
+                (d, t, float(o), float(h), float(l), float(c), int(v))
+                for d, t, o, h, l, c, v in df_ordered.to_numpy()
+            ]
+
+        except ValueError as ve:
+            logger.error("Unpacking error. Columns found: %s. Error: %s", df.columns.tolist(), ve)
+            raise
+        except Exception as e:
+            logger.error("Error formatting DataFrame rows: %s", e)
+            raise
 
         total = 0
         with self._transaction():
-            with self._conn.cursor() as cur:
-                # Process in blocks / Procesar en bloques
+            with self.connection.cursor() as cur:
                 for start in range(0, len(rows), block_size):
                     block = rows[start : start + block_size]
                     psycopg2.extras.execute_values(cur, _UPSERT_SQL, block)
                     total += len(block)
-                    logger.debug(
-                        "Upserted block %d–%d (%d rows)",
-                        start + 1,
-                        start + len(block),
-                        len(block),
-                    )
-
+        
         logger.info("Total rows upserted: %d", total)
         return total
 
@@ -169,7 +190,7 @@ class Repository:
 
         Retorna la fecha más reciente almacenada para un ticker, o None.
         """
-        with self._conn.cursor() as cur:
+        with self.connection.cursor() as cur:
             cur.execute(
                 "SELECT MAX(date) FROM market_data WHERE ticker = %s;",
                 (ticker,),

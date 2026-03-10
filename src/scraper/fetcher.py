@@ -11,7 +11,8 @@ Obtiene datos históricos OHLCV (Open, High, Low, Close, Volume) en rangos de fe
 import asyncio
 import logging
 from datetime import date
-from typing import Optional
+from typing import Optional, Dict
+from functools import partial
 
 import yfinance as yf
 import pandas as pd
@@ -30,6 +31,7 @@ SUPPORTED_TICKERS: dict[str, str] = {
 
 class FetchError(Exception):
     """Raised when a ticker fetch fails. / Se lanza cuando la descarga de un ticker falla."""
+    pass
 
 
 async def fetch_ticker(
@@ -58,28 +60,41 @@ async def fetch_ticker(
     logger.info("Fetching %s from %s to %s [interval=%s]", ticker, start, end, interval)
 
     try:
-        # yfinance is synchronous; run in a thread pool to keep the event loop free.
-        # yfinance es síncrono; se ejecuta en un thread pool para no bloquear el event loop.
         loop = asyncio.get_running_loop()
-        df: pd.DataFrame = await loop.run_in_executor(
-            None,
-            lambda: yf.download(
-                ticker,
-                start=str(start),
-                end=str(end),
-                interval=interval,
-                progress=False,
-                auto_adjust=True,
-            ),
+            
+        # Uso de functools.partial para mayor claridad en el executor
+        download_func = partial(
+            yf.download,
+            tickers=ticker,
+            start=start,
+            end=end,
+            interval=interval,
+            progress=False,
+            auto_adjust=True
         )
+            
+        # 1. Cambiamos el tipo esperado a Optional[pd.DataFrame]
+        raw_df: Optional[pd.DataFrame] = await loop.run_in_executor(None, download_func)
+
+        # 2. Type Guard: Verificamos si es None antes de continuar
+        if raw_df is None:
+            raise FetchError(f"Yahoo Finance returned None for {ticker}")
+        
+        # A partir de aquí, el linter sabe que 'df' es pd.DataFrame
+        df: pd.DataFrame = raw_df
+
     except Exception as exc:
-        raise FetchError(f"Network error while fetching {ticker}: {exc}") from exc
+            raise FetchError(f"Network error for {ticker}: {exc}") from exc
 
     if df.empty:
         raise FetchError(f"No data returned for {ticker} in range {start} → {end}.")
 
+    # Si las columnas son MultiIndex, nos quedamos solo con el primer nivel (Open, High, etc.)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
     # Normalise column names / Normalizar nombres de columnas
-    df.columns = [c.lower() for c in df.columns]
+    df.columns = [str(c).lower() for c in df.columns]
     df.index.name = "date"
     df = df.reset_index()
     df["ticker"] = ticker
@@ -110,17 +125,24 @@ async def fetch_all(
         Dict mapping ticker symbol → DataFrame.
     """
     if tickers is None:
-        tickers = list(SUPPORTED_TICKERS.values())
+            tickers = list(SUPPORTED_TICKERS.values())
 
-    tasks = {ticker: fetch_ticker(ticker, start, end, interval) for ticker in tickers}
+        # Crear tareas
+    tasks = [fetch_ticker(t, start, end, interval) for t in tickers]
+        
+    # gather con return_exceptions=True para no detener todo el proceso si uno falla
+    # results_list es inferido como Sequence[pd.DataFrame | BaseException]
+    results_list = await asyncio.gather(*tasks, return_exceptions=True)
 
     results: dict[str, pd.DataFrame] = {}
-    raw = await asyncio.gather(*tasks.values(), return_exceptions=True)
-
-    for ticker, result in zip(tasks.keys(), raw):
-        if isinstance(result, Exception):
-            logger.error("Failed to fetch %s: %s", ticker, result)
-        else:
-            results[ticker] = result
+    
+    for ticker, res in zip(tickers, results_list):
+        # Al usar BaseException, cubrimos TODO lo que no sea el retorno exitoso
+        if isinstance(res, BaseException):
+            logger.error("Failed to fetch %s: %s", ticker, res)
+            continue
+        
+        # Ahora Pylance garantiza que res es pd.DataFrame
+        results[ticker] = res
 
     return results
