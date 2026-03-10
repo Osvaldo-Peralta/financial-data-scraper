@@ -1,0 +1,9 @@
+# Runtime dependencies / Dependencias de ejecución
+yfinance>=0.2.40
+pandas>=2.2.0
+psycopg2-binary>=2.9.9
+pydantic-settings>=2.3.0
+
+# Dev / Test dependencies / Dependencias de desarrollo y pruebas
+pytest>=8.2.0
+pytest-asyncio>=0.23.7
