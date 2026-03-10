@@ -1,8 +1,8 @@
 # 📈 Financial Data Scraper
 
-> Async Python scraper that fetches historical OHLCV data for financial indices (S&P 500, Nasdaq-100) from Yahoo Finance and persists it to PostgreSQL using block-based UPSERT for high-throughput ingestion.
+> Async Python scraper that fetches historical OHLCV data for financial indices (`S&P 500`, `Nasdaq-100`) from Yahoo Finance and persists it to PostgreSQL using block-based UPSERT for high-throughput ingestion.
 
-> Scraper asíncrono en Python que descarga datos históricos OHLCV de índices financieros (S&P 500, Nasdaq-100) desde Yahoo Finance y los persiste en PostgreSQL mediante inserción por bloques (UPSERT) para alta eficiencia.
+> Scraper asíncrono en Python que descarga datos históricos OHLCV de índices financieros (`S&P 500`, `Nasdaq-100`) desde Yahoo Finance y los persiste en PostgreSQL mediante inserción por bloques (UPSERT) para alta eficiencia.
 
 [![CI](https://github.com/Osvaldo-Peralta/financial-data-scraper/actions/workflows/ci.yml/badge.svg)](https://github.com/Osvaldo-Peralta/financial-data-scraper/actions)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
